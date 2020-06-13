@@ -73,7 +73,7 @@ def test_load_config_file_error(default_conf, mocker, caplog) -> None:
     mocker.patch('freqtrade.configuration.load_config.open', mocker.mock_open(read_data=filedata))
     mocker.patch.object(Path, "read_text", MagicMock(return_value=filedata))
 
-    with pytest.raises(OperationalException, match=f".*Please verify the following segment.*"):
+    with pytest.raises(OperationalException, match=r".*Please verify the following segment.*"):
         load_config_file('somefile')
 
 
@@ -654,12 +654,14 @@ def test_set_loggers() -> None:
     assert logging.getLogger('requests').level is logging.DEBUG
     assert logging.getLogger('ccxt.base.exchange').level is logging.INFO
     assert logging.getLogger('telegram').level is logging.INFO
+    assert logging.getLogger('werkzeug').level is logging.INFO
 
-    _set_loggers(verbosity=3)
+    _set_loggers(verbosity=3, api_verbosity='error')
 
     assert logging.getLogger('requests').level is logging.DEBUG
     assert logging.getLogger('ccxt.base.exchange').level is logging.DEBUG
     assert logging.getLogger('telegram').level is logging.INFO
+    assert logging.getLogger('werkzeug').level is logging.ERROR
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="does not run on windows")
@@ -1041,18 +1043,6 @@ def test_process_temporary_deprecated_settings(mocker, default_conf, setting, ca
     assert default_conf[setting[0]][setting[1]] == setting[5]
 
 
-def test_process_deprecated_setting_pairlists(mocker, default_conf, caplog):
-    patched_configuration_load_config_file(mocker, default_conf)
-    default_conf.update({'pairlist': {
-        'method': 'VolumePairList',
-        'config': {'precision_filter': True}
-    }})
-
-    process_temporary_deprecated_settings(default_conf)
-    assert log_has_re(r'DEPRECATED.*precision_filter.*', caplog)
-    assert log_has_re(r'DEPRECATED.*in pairlist is deprecated and must be moved*', caplog)
-
-
 def test_process_deprecated_setting_edge(mocker, edge_conf, caplog):
     patched_configuration_load_config_file(mocker, edge_conf)
     edge_conf.update({'edge': {
@@ -1060,8 +1050,9 @@ def test_process_deprecated_setting_edge(mocker, edge_conf, caplog):
         'capital_available_percentage': 0.5,
     }})
 
-    process_temporary_deprecated_settings(edge_conf)
-    assert log_has_re(r"DEPRECATED.*Using 'edge.capital_available_percentage'*", caplog)
+    with pytest.raises(OperationalException,
+                       match=r"DEPRECATED.*Using 'edge.capital_available_percentage'*"):
+        process_temporary_deprecated_settings(edge_conf)
 
 
 def test_check_conflicting_settings(mocker, default_conf, caplog):

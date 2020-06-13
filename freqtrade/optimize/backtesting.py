@@ -18,8 +18,10 @@ from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_seconds
-from freqtrade.optimize.optimize_reports import (show_backtest_results,
+from freqtrade.optimize.optimize_reports import (generate_backtest_stats,
+                                                 show_backtest_results,
                                                  store_backtest_result)
+from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.persistence import Trade
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.state import RunMode
@@ -63,10 +65,19 @@ class Backtesting:
         self.strategylist: List[IStrategy] = []
         self.exchange = ExchangeResolver.load_exchange(self.config['exchange']['name'], self.config)
 
+        self.pairlists = PairListManager(self.exchange, self.config)
+        if 'VolumePairList' in self.pairlists.name_list:
+            raise OperationalException("VolumePairList not allowed for backtesting.")
+
+        self.pairlists.refresh_pairlist()
+
+        if len(self.pairlists.whitelist) == 0:
+            raise OperationalException("No pair in whitelist.")
+
         if config.get('fee'):
             self.fee = config['fee']
         else:
-            self.fee = self.exchange.get_fee(symbol=self.config['exchange']['pair_whitelist'][0])
+            self.fee = self.exchange.get_fee(symbol=self.pairlists.whitelist[0])
 
         if self.config.get('runmode') != RunMode.HYPEROPT:
             self.dataprovider = DataProvider(self.config, self.exchange)
@@ -111,7 +122,7 @@ class Backtesting:
 
         data = history.load_data(
             datadir=self.config['datadir'],
-            pairs=self.config['exchange']['pair_whitelist'],
+            pairs=self.pairlists.whitelist,
             timeframe=self.timeframe,
             timerange=timerange,
             startup_candles=self.required_startup,
@@ -401,4 +412,5 @@ class Backtesting:
         if self.config.get('export', False):
             store_backtest_result(self.config['exportfilename'], all_results)
         # Show backtest results
-        show_backtest_results(self.config, data, all_results)
+        stats = generate_backtest_stats(self.config, data, all_results)
+        show_backtest_results(self.config, stats)
