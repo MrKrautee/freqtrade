@@ -7,7 +7,7 @@ import warnings
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 import arrow
 from pandas import DataFrame
@@ -17,7 +17,9 @@ from freqtrade.exceptions import StrategyError
 from freqtrade.exchange import timeframe_to_minutes
 from freqtrade.persistence import Trade
 from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
+from freqtrade.constants import ListPairsWithTimeframes
 from freqtrade.wallets import Wallets
+
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,9 @@ class IStrategy(ABC):
     # run "populate_indicators" only for new candle
     process_only_new_candles: bool = False
 
+    # Disable checking the dataframe (converts the error into a warning message)
+    disable_dataframe_checks: bool = False
+
     # Count of candles the strategy requires before producing valid signals
     startup_candle_count: int = 0
 
@@ -185,7 +190,7 @@ class IStrategy(ABC):
         """
         return False
 
-    def informative_pairs(self) -> List[Tuple[str, str]]:
+    def informative_pairs(self) -> ListPairsWithTimeframes:
         """
         Define additional, informative pair/interval combinations to be cached from the exchange.
         These pair/interval combinations are non-tradeable, unless they are part
@@ -283,8 +288,7 @@ class IStrategy(ABC):
         """ keep some data for dataframes """
         return len(dataframe), dataframe["close"].iloc[-1], dataframe["date"].iloc[-1]
 
-    @staticmethod
-    def assert_df(dataframe: DataFrame, df_len: int, df_close: float, df_date: datetime):
+    def assert_df(self, dataframe: DataFrame, df_len: int, df_close: float, df_date: datetime):
         """ make sure data is unmodified """
         message = ""
         if df_len != len(dataframe):
@@ -294,7 +298,10 @@ class IStrategy(ABC):
         elif df_date != dataframe["date"].iloc[-1]:
             message = "last date"
         if message:
-            raise StrategyError(f"Dataframe returned from strategy has mismatching {message}.")
+            if self.disable_dataframe_checks:
+                logger.warning(f"Dataframe returned from strategy has mismatching {message}.")
+            else:
+                raise StrategyError(f"Dataframe returned from strategy has mismatching {message}.")
 
     def get_signal(self, pair: str, interval: str, dataframe: DataFrame) -> Tuple[bool, bool]:
         """
@@ -308,7 +315,6 @@ class IStrategy(ABC):
             logger.warning('Empty candle (OHLCV) data for pair %s', pair)
             return False, False
 
-        latest_date = dataframe['date'].max()
         try:
             df_len, df_close, df_date = self.preserve_df(dataframe)
             dataframe = strategy_safe_wrapper(
@@ -324,17 +330,19 @@ class IStrategy(ABC):
             logger.warning('Empty dataframe for pair %s', pair)
             return False, False
 
+        latest_date = dataframe['date'].max()
         latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
+        # Explicitly convert to arrow object to ensure the below comparison does not fail
+        latest_date = arrow.get(latest_date)
 
         # Check if dataframe is out of date
-        signal_date = arrow.get(latest['date'])
         interval_minutes = timeframe_to_minutes(interval)
         offset = self.config.get('exchange', {}).get('outdated_offset', 5)
-        if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes * 2 + offset))):
+        if latest_date < (arrow.utcnow().shift(minutes=-(interval_minutes * 2 + offset))):
             logger.warning(
                 'Outdated history for pair %s. Last tick is %s minutes old',
                 pair,
-                (arrow.utcnow() - signal_date).seconds // 60
+                (arrow.utcnow() - latest_date).seconds // 60
             )
             return False, False
 

@@ -88,15 +88,19 @@ def test_init_ccxt_kwargs(default_conf, mocker, caplog):
     caplog.clear()
     conf = copy.deepcopy(default_conf)
     conf['exchange']['ccxt_config'] = {'TestKWARG': 11}
+    conf['exchange']['ccxt_sync_config'] = {'TestKWARG44': 11}
     conf['exchange']['ccxt_async_config'] = {'asyncio_loop': True}
-
+    asynclogmsg = "Applying additional ccxt config: {'TestKWARG': 11, 'asyncio_loop': True}"
     ex = Exchange(conf)
-    assert not log_has("Applying additional ccxt config: {'aiohttp_trust_env': True}", caplog)
     assert not ex._api_async.aiohttp_trust_env
     assert hasattr(ex._api, 'TestKWARG')
     assert ex._api.TestKWARG == 11
-    assert not hasattr(ex._api_async, 'TestKWARG')
-    assert log_has("Applying additional ccxt config: {'TestKWARG': 11}", caplog)
+    # ccxt_config is assigned to both sync and async
+    assert not hasattr(ex._api_async, 'TestKWARG44')
+
+    assert hasattr(ex._api_async, 'TestKWARG')
+    assert log_has("Applying additional ccxt config: {'TestKWARG': 11, 'TestKWARG44': 11}", caplog)
+    assert log_has(asynclogmsg, caplog)
 
 
 def test_destroy(default_conf, mocker, caplog):
@@ -517,9 +521,9 @@ def test_validate_pairs_restricted(default_conf, mocker, caplog):
     mocker.patch('freqtrade.exchange.Exchange.validate_stakecurrency')
 
     Exchange(default_conf)
-    assert log_has(f"Pair XRP/BTC is restricted for some users on this exchange."
-                   f"Please check if you are impacted by this restriction "
-                   f"on the exchange and eventually remove XRP/BTC from your whitelist.", caplog)
+    assert log_has("Pair XRP/BTC is restricted for some users on this exchange."
+                   "Please check if you are impacted by this restriction "
+                   "on the exchange and eventually remove XRP/BTC from your whitelist.", caplog)
 
 
 def test_validate_pairs_stakecompatibility(default_conf, mocker, caplog):
@@ -1413,13 +1417,13 @@ def test_refresh_latest_ohlcv_inv_result(default_conf, mocker, caplog):
 
 
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
-def test_get_order_book(default_conf, mocker, order_book_l2, exchange_name):
+def test_fetch_l2_order_book(default_conf, mocker, order_book_l2, exchange_name):
     default_conf['exchange']['name'] = exchange_name
     api_mock = MagicMock()
 
     api_mock.fetch_l2_order_book = order_book_l2
     exchange = get_patched_exchange(mocker, default_conf, api_mock, id=exchange_name)
-    order_book = exchange.get_order_book(pair='ETH/BTC', limit=10)
+    order_book = exchange.fetch_l2_order_book(pair='ETH/BTC', limit=10)
     assert 'bids' in order_book
     assert 'asks' in order_book
     assert len(order_book['bids']) == 10
@@ -1427,20 +1431,20 @@ def test_get_order_book(default_conf, mocker, order_book_l2, exchange_name):
 
 
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
-def test_get_order_book_exception(default_conf, mocker, exchange_name):
+def test_fetch_l2_order_book_exception(default_conf, mocker, exchange_name):
     api_mock = MagicMock()
     with pytest.raises(OperationalException):
         api_mock.fetch_l2_order_book = MagicMock(side_effect=ccxt.NotSupported("Not supported"))
         exchange = get_patched_exchange(mocker, default_conf, api_mock, id=exchange_name)
-        exchange.get_order_book(pair='ETH/BTC', limit=50)
+        exchange.fetch_l2_order_book(pair='ETH/BTC', limit=50)
     with pytest.raises(TemporaryError):
         api_mock.fetch_l2_order_book = MagicMock(side_effect=ccxt.NetworkError("DeadBeef"))
         exchange = get_patched_exchange(mocker, default_conf, api_mock, id=exchange_name)
-        exchange.get_order_book(pair='ETH/BTC', limit=50)
+        exchange.fetch_l2_order_book(pair='ETH/BTC', limit=50)
     with pytest.raises(OperationalException):
         api_mock.fetch_l2_order_book = MagicMock(side_effect=ccxt.BaseError("DeadBeef"))
         exchange = get_patched_exchange(mocker, default_conf, api_mock, id=exchange_name)
-        exchange.get_order_book(pair='ETH/BTC', limit=50)
+        exchange.fetch_l2_order_book(pair='ETH/BTC', limit=50)
 
 
 def make_fetch_ohlcv_mock(data):
@@ -2188,12 +2192,18 @@ def test_extract_cost_curr_rate(mocker, default_conf, order, expected) -> None:
         'fee': {'currency': 'NEO', 'cost': 0.0012}}, 0.001944),
     ({'symbol': 'ETH/BTC', 'amount': 2.21, 'cost': 0.02992561,
         'fee': {'currency': 'NEO', 'cost': 0.00027452}}, 0.00074305),
-    # TODO: More tests here!
     # Rate included in return - return as is
     ({'symbol': 'ETH/BTC', 'amount': 0.04, 'cost': 0.05,
         'fee': {'currency': 'USDT', 'cost': 0.34, 'rate': 0.01}}, 0.01),
     ({'symbol': 'ETH/BTC', 'amount': 0.04, 'cost': 0.05,
         'fee': {'currency': 'USDT', 'cost': 0.34, 'rate': 0.005}}, 0.005),
+    # 0.1% filled - no costs (kraken - #3431)
+    ({'symbol': 'ETH/BTC', 'amount': 0.04, 'cost': 0.0,
+      'fee': {'currency': 'BTC', 'cost': 0.0, 'rate': None}}, None),
+    ({'symbol': 'ETH/BTC', 'amount': 0.04, 'cost': 0.0,
+      'fee': {'currency': 'ETH', 'cost': 0.0, 'rate': None}}, 0.0),
+    ({'symbol': 'ETH/BTC', 'amount': 0.04, 'cost': 0.0,
+      'fee': {'currency': 'NEO', 'cost': 0.0, 'rate': None}}, None),
 ])
 def test_calculate_fee_rate(mocker, default_conf, order, expected) -> None:
     mocker.patch('freqtrade.exchange.Exchange.fetch_ticker', return_value={'last': 0.081})

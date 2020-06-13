@@ -7,7 +7,7 @@ import traceback
 from datetime import datetime
 from math import isclose
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import arrow
 from cachetools import TTLCache
@@ -18,7 +18,7 @@ from freqtrade.configuration import validate_config_consistency
 from freqtrade.data.converter import order_book_to_dataframe
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.edge import Edge
-from freqtrade.exceptions import DependencyException, InvalidOrderException
+from freqtrade.exceptions import DependencyException, InvalidOrderException, PricingError
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_next_date
 from freqtrade.misc import safe_value_fallback
 from freqtrade.pairlist.pairlistmanager import PairListManager
@@ -84,7 +84,7 @@ class FreqtradeBot:
         self.edge = Edge(self.config, self.exchange, self.strategy) if \
             self.config.get('edge', {}).get('enabled', False) else None
 
-        self.active_pair_whitelist = self._refresh_whitelist()
+        self.active_pair_whitelist = self._refresh_active_whitelist()
 
         # Set initial bot state from config
         initial_state = self.config.get('initial_state')
@@ -145,10 +145,10 @@ class FreqtradeBot:
         # Query trades from persistence layer
         trades = Trade.get_open_trades()
 
-        self.active_pair_whitelist = self._refresh_whitelist(trades)
+        self.active_pair_whitelist = self._refresh_active_whitelist(trades)
 
         # Refreshing candles
-        self.dataprovider.refresh(self._create_pair_whitelist(self.active_pair_whitelist),
+        self.dataprovider.refresh(self.pairlists.create_pair_list(self.active_pair_whitelist),
                                   self.strategy.informative_pairs())
 
         with self._sell_lock:
@@ -175,9 +175,10 @@ class FreqtradeBot:
         if self.config['cancel_open_orders_on_exit']:
             self.cancel_all_open_orders()
 
-    def _refresh_whitelist(self, trades: List[Trade] = []) -> List[str]:
+    def _refresh_active_whitelist(self, trades: List[Trade] = []) -> List[str]:
         """
-        Refresh whitelist from pairlist or edge and extend it with trades.
+        Refresh active whitelist from pairlist or edge and extend it with
+        pairs that have open trades.
         """
         # Refresh whitelist
         self.pairlists.refresh_pairlist()
@@ -193,12 +194,6 @@ class FreqtradeBot:
             # It ensures that candle (OHLCV) data are downloaded for open trades as well
             _whitelist.extend([trade.pair for trade in trades if trade.pair not in _whitelist])
         return _whitelist
-
-    def _create_pair_whitelist(self, pairs: List[str]) -> List[Tuple[str, str]]:
-        """
-        Create pair-whitelist tuple with (pair, ticker_interval)
-        """
-        return [(pair, self.config['ticker_interval']) for pair in pairs]
 
     def get_free_open_trades(self):
         """
@@ -265,12 +260,19 @@ class FreqtradeBot:
                 f"Getting price from order book {bid_strategy['price_side'].capitalize()} side."
             )
             order_book_top = bid_strategy.get('order_book_top', 1)
-            order_book = self.exchange.get_order_book(pair, order_book_top)
+            order_book = self.exchange.fetch_l2_order_book(pair, order_book_top)
             logger.debug('order_book %s', order_book)
             # top 1 = index 0
-            order_book_rate = order_book[f"{bid_strategy['price_side']}s"][order_book_top - 1][0]
-            logger.info(f'...top {order_book_top} order book buy rate {order_book_rate:.8f}')
-            used_rate = order_book_rate
+            try:
+                rate_from_l2 = order_book[f"{bid_strategy['price_side']}s"][order_book_top - 1][0]
+            except (IndexError, KeyError) as e:
+                logger.warning(
+                    "Buy Price from orderbook could not be determined."
+                    f"Orderbook: {order_book}"
+                 )
+                raise PricingError from e
+            logger.info(f'...top {order_book_top} order book buy rate {rate_from_l2:.8f}')
+            used_rate = rate_from_l2
         else:
             logger.info(f"Using Last {bid_strategy['price_side'].capitalize()} / Last Price")
             ticker = self.exchange.fetch_ticker(pair)
@@ -451,7 +453,7 @@ class FreqtradeBot:
         """
         conf_bids_to_ask_delta = conf.get('bids_to_ask_delta', 0)
         logger.info(f"Checking depth of market for {pair} ...")
-        order_book = self.exchange.get_order_book(pair, 1000)
+        order_book = self.exchange.fetch_l2_order_book(pair, 1000)
         order_book_data_frame = order_book_to_dataframe(order_book['bids'], order_book['asks'])
         order_book_bids = order_book_data_frame['b_size'].sum()
         order_book_asks = order_book_data_frame['a_size'].sum()
@@ -640,7 +642,7 @@ class FreqtradeBot:
         """
         Helper generator to query orderbook in loop (used for early sell-order placing)
         """
-        order_book = self.exchange.get_order_book(pair, order_book_max)
+        order_book = self.exchange.fetch_l2_order_book(pair, order_book_max)
         for i in range(order_book_min, order_book_max + 1):
             yield order_book[side][i - 1][0]
 
@@ -667,10 +669,15 @@ class FreqtradeBot:
             logger.info(
                 f"Getting price from order book {ask_strategy['price_side'].capitalize()} side."
             )
-            rate = next(self._order_book_gen(pair, f"{ask_strategy['price_side']}s"))
-
+            try:
+                rate = next(self._order_book_gen(pair, f"{ask_strategy['price_side']}s"))
+            except (IndexError, KeyError) as e:
+                logger.warning("Sell Price at location from orderbook could not be determined.")
+                raise PricingError from e
         else:
             rate = self.exchange.fetch_ticker(pair)[ask_strategy['price_side']]
+        if rate is None:
+            raise PricingError(f"Sell-Rate for {pair} was empty.")
         self._sell_rate_cache[pair] = rate
         return rate
 
@@ -695,18 +702,27 @@ class FreqtradeBot:
                 self.dataprovider.ohlcv(trade.pair, self.strategy.ticker_interval))
 
         if config_ask_strategy.get('use_order_book', False):
-            logger.debug(f'Using order book for selling {trade.pair}...')
-            # logger.debug('Order book %s',orderBook)
             order_book_min = config_ask_strategy.get('order_book_min', 1)
             order_book_max = config_ask_strategy.get('order_book_max', 1)
+            logger.debug(f'Using order book between {order_book_min} and {order_book_max} '
+                         f'for selling {trade.pair}...')
 
             order_book = self._order_book_gen(trade.pair, f"{config_ask_strategy['price_side']}s",
                                               order_book_min=order_book_min,
                                               order_book_max=order_book_max)
             for i in range(order_book_min, order_book_max + 1):
-                sell_rate = next(order_book)
+                try:
+                    sell_rate = next(order_book)
+                except (IndexError, KeyError) as e:
+                    logger.warning(
+                        f"Sell Price at location {i} from orderbook could not be determined."
+                    )
+                    raise PricingError from e
                 logger.debug(f"  order book {config_ask_strategy['price_side']} top {i}: "
                              f"{sell_rate:0.8f}")
+                # Assign sell-rate to cache - otherwise sell-rate is never updated in the cache,
+                # resulting in outdated RPC messages
+                self._sell_rate_cache[trade.pair] = sell_rate
 
                 if self._check_and_execute_sell(trade, sell_rate, buy, sell):
                     return True
@@ -879,10 +895,10 @@ class FreqtradeBot:
                 logger.info('Cannot query order for %s due to %s', trade, traceback.format_exc())
                 continue
 
-            trade_state_update = self.update_trade_state(trade, order)
+            fully_cancelled = self.update_trade_state(trade, order)
 
-            if (order['side'] == 'buy' and (
-                    trade_state_update
+            if (order['side'] == 'buy' and (order['status'] == 'open' or fully_cancelled) and (
+                    fully_cancelled
                     or self._check_timed_out('buy', order)
                     or strategy_safe_wrapper(self.strategy.check_buy_timeout,
                                              default_retval=False)(pair=trade.pair,
@@ -890,8 +906,8 @@ class FreqtradeBot:
                                                                    order=order))):
                 self.handle_cancel_buy(trade, order, constants.CANCEL_REASON['TIMEOUT'])
 
-            elif (order['side'] == 'sell' and (
-                  trade_state_update
+            elif (order['side'] == 'sell' and (order['status'] == 'open' or fully_cancelled) and (
+                  fully_cancelled
                   or self._check_timed_out('sell', order)
                   or strategy_safe_wrapper(self.strategy.check_sell_timeout,
                                            default_retval=False)(pair=trade.pair,
@@ -1126,6 +1142,11 @@ class FreqtradeBot:
         """
         Sends rpc notification when a sell cancel occured.
         """
+        if trade.sell_order_status == reason:
+            return
+        else:
+            trade.sell_order_status = reason
+
         profit_rate = trade.close_rate if trade.close_rate else trade.close_rate_requested
         profit_trade = trade.calc_profit(rate=profit_rate)
         current_rate = self.get_sell_rate(trade.pair, False)

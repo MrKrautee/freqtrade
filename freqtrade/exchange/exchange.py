@@ -23,6 +23,7 @@ from freqtrade.exceptions import (DependencyException, InvalidOrderException,
                                   OperationalException, TemporaryError)
 from freqtrade.exchange.common import BAD_EXCHANGES, retrier, retrier_async
 from freqtrade.misc import deep_merge_dicts, safe_value_fallback
+from freqtrade.constants import ListPairsWithTimeframes
 
 CcxtModuleType = Any
 
@@ -97,12 +98,14 @@ class Exchange:
 
         # Initialize ccxt objects
         ccxt_config = self._ccxt_config.copy()
-        ccxt_config = deep_merge_dicts(exchange_config.get('ccxt_config', {}),
-                                       ccxt_config)
-        self._api = self._init_ccxt(
-            exchange_config, ccxt_kwargs=ccxt_config)
+        ccxt_config = deep_merge_dicts(exchange_config.get('ccxt_config', {}), ccxt_config)
+        ccxt_config = deep_merge_dicts(exchange_config.get('ccxt_sync_config', {}), ccxt_config)
+
+        self._api = self._init_ccxt(exchange_config, ccxt_kwargs=ccxt_config)
 
         ccxt_async_config = self._ccxt_config.copy()
+        ccxt_async_config = deep_merge_dicts(exchange_config.get('ccxt_config', {}),
+                                             ccxt_async_config)
         ccxt_async_config = deep_merge_dicts(exchange_config.get('ccxt_async_config', {}),
                                              ccxt_async_config)
         self._api_async = self._init_ccxt(
@@ -366,8 +369,7 @@ class Exchange:
                 f"Invalid timeframe '{timeframe}'. This exchange supports: {self.timeframes}")
 
         if timeframe and timeframe_to_minutes(timeframe) < 1:
-            raise OperationalException(
-                f"Timeframes < 1m are currently not supported by Freqtrade.")
+            raise OperationalException("Timeframes < 1m are currently not supported by Freqtrade.")
 
     def validate_ordertypes(self, order_types: Dict) -> None:
         """
@@ -676,7 +678,7 @@ class Exchange:
         logger.info("Downloaded data for %s with length %s.", pair, len(data))
         return data
 
-    def refresh_latest_ohlcv(self, pair_list: List[Tuple[str, str]]) -> List[Tuple[str, List]]:
+    def refresh_latest_ohlcv(self, pair_list: ListPairsWithTimeframes) -> List[Tuple[str, List]]:
         """
         Refresh in-memory OHLCV asynchronously and set `_klines` with the result
         Loops asynchronously over pair_list and downloads all pairs async (semi-parallel).
@@ -887,14 +889,19 @@ class Exchange:
         Async wrapper handling downloading trades using either time or id based methods.
         """
 
+        logger.debug(f"_async_get_trade_history(), pair: {pair}, "
+                     f"since: {since}, until: {until}, from_id: {from_id}")
+
+        if until is None:
+            until = ccxt.Exchange.milliseconds()
+            logger.debug(f"Exchange milliseconds: {until}")
+
         if self._trades_pagination == 'time':
             return await self._async_get_trade_history_time(
-                pair=pair, since=since,
-                until=until or ccxt.Exchange.milliseconds())
+                pair=pair, since=since, until=until)
         elif self._trades_pagination == 'id':
             return await self._async_get_trade_history_id(
-                pair=pair, since=since,
-                until=until or ccxt.Exchange.milliseconds(), from_id=from_id
+                pair=pair, since=since, until=until, from_id=from_id
             )
         else:
             raise OperationalException(f"Exchange {self.name} does use neither time, "
@@ -998,7 +1005,7 @@ class Exchange:
             raise OperationalException(e) from e
 
     @retrier
-    def get_order_book(self, pair: str, limit: int = 100) -> dict:
+    def fetch_l2_order_book(self, pair: str, limit: int = 100) -> dict:
         """
         get order book level 2 from exchange
 
@@ -1102,9 +1109,12 @@ class Exchange:
                 order['fee']['cost'] / safe_value_fallback(order, order, 'filled', 'amount'), 8)
         elif fee_curr in self.get_pair_quote_currency(order['symbol']):
             # Quote currency - divide by cost
-            return round(order['fee']['cost'] / order['cost'], 8)
+            return round(order['fee']['cost'] / order['cost'], 8) if order['cost'] else None
         else:
             # If Fee currency is a different currency
+            if not order['cost']:
+                # If cost is None or 0.0 -> falsy, return None
+                return None
             try:
                 comb = self.get_valid_pair_combination(fee_curr, self._config['stake_currency'])
                 tick = self.fetch_ticker(comb)

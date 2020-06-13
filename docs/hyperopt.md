@@ -265,7 +265,7 @@ freqtrade hyperopt --timerange 20180401-20180501
 Hyperopt can reuse `populate_indicators`, `populate_buy_trend`, `populate_sell_trend` from your strategy, assuming these methods are **not** in your custom hyperopt file, and a strategy is provided.
 
 ```bash
-freqtrade hyperopt --strategy SampleStrategy --customhyperopt SampleHyperopt
+freqtrade hyperopt --strategy SampleStrategy --hyperopt SampleHyperopt
 ```
 
 ### Running Hyperopt with Smaller Search Space
@@ -487,7 +487,7 @@ As stated in the comment, you can also use it as the values of the corresponding
 
 If you are optimizing trailing stop values, Freqtrade creates the 'trailing' optimization hyperspace for you. By default, the `trailing_stop` parameter is always set to True in that hyperspace, the value of the `trailing_only_offset_is_reached` vary between True and False, the values of the `trailing_stop_positive` and `trailing_stop_positive_offset` parameters vary in the ranges 0.02...0.35 and 0.01...0.1 correspondingly, which is sufficient in most cases.
 
-Override the `trailing_space()` method and define the desired range in it if you need values of the trailing stop parameters to vary in other ranges during hyperoptimization. A sample for this method can be found in [user_data/hyperopts/sample_hyperopt_advanced.py](https://github.com/freqtrade/freqtrade/blob/develop/user_data/hyperopts/sample_hyperopt_advanced.py).
+Override the `trailing_space()` method and define the desired range in it if you need values of the trailing stop parameters to vary in other ranges during hyperoptimization. A sample for this method can be found in [user_data/hyperopts/sample_hyperopt_advanced.py](https://github.com/freqtrade/freqtrade/blob/develop/freqtrade/templates/sample_hyperopt_advanced.py).
 
 ## Show details of Hyperopt results
 

@@ -1,28 +1,25 @@
 """
-Static Pair List provider
-
-Provides pair white list as it configured in config
+Shuffle pair list filter
 """
 import logging
+import random
 from typing import Any, Dict, List
 
-from freqtrade.exceptions import OperationalException
 from freqtrade.pairlist.IPairList import IPairList
 
 
 logger = logging.getLogger(__name__)
 
 
-class StaticPairList(IPairList):
+class ShuffleFilter(IPairList):
 
     def __init__(self, exchange, pairlistmanager,
                  config: Dict[str, Any], pairlistconfig: Dict[str, Any],
                  pairlist_pos: int) -> None:
         super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
 
-        if self._pairlist_pos != 0:
-            raise OperationalException(f"{self.name} can only be used in the first position "
-                                       "in the list of Pairlist Handlers.")
+        self._seed = pairlistconfig.get('seed')
+        self._random = random.Random(self._seed)
 
     @property
     def needstickers(self) -> bool:
@@ -36,18 +33,9 @@ class StaticPairList(IPairList):
     def short_desc(self) -> str:
         """
         Short whitelist method description - used for startup-messages
-        -> Please overwrite in subclasses
         """
-        return f"{self.name}"
-
-    def gen_pairlist(self, cached_pairlist: List[str], tickers: Dict) -> List[str]:
-        """
-        Generate the pairlist
-        :param cached_pairlist: Previously generated pairlist (cached)
-        :param tickers: Tickers (from exchange.get_tickers()).
-        :return: List of pairs
-        """
-        return self._whitelist_for_active_markets(self._config['exchange']['pair_whitelist'])
+        return (f"{self.name} - Shuffling pairs" +
+                (f", seed = {self._seed}." if self._seed is not None else "."))
 
     def filter_pairlist(self, pairlist: List[str], tickers: Dict) -> List[str]:
         """
@@ -57,4 +45,7 @@ class StaticPairList(IPairList):
         :param tickers: Tickers (from exchange.get_tickers()). May be cached.
         :return: new whitelist
         """
+        # Shuffle is done inplace
+        self._random.shuffle(pairlist)
+
         return pairlist

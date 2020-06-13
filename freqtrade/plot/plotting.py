@@ -10,8 +10,9 @@ from freqtrade.data.btanalysis import (calculate_max_drawdown,
                                        create_cum_profit,
                                        extract_trades_of_period, load_trades)
 from freqtrade.data.converter import trim_dataframe
-from freqtrade.exchange import timeframe_to_prev_date
 from freqtrade.data.history import load_data
+from freqtrade.exceptions import OperationalException
+from freqtrade.exchange import timeframe_to_prev_date
 from freqtrade.misc import pair_to_filename
 from freqtrade.resolvers import StrategyResolver
 
@@ -161,7 +162,7 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
     # Trades can be empty
     if trades is not None and len(trades) > 0:
         # Create description for sell summarizing the trade
-        trades['desc'] = trades.apply(lambda row: f"{round(row['profitperc'] * 100, 1)}%, "
+        trades['desc'] = trades.apply(lambda row: f"{round(row['profit_percent'] * 100, 1)}%, "
                                                   f"{row['sell_reason']}, {row['duration']} min",
                                                   axis=1)
         trade_buys = go.Scatter(
@@ -180,9 +181,9 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
         )
 
         trade_sells = go.Scatter(
-            x=trades.loc[trades['profitperc'] > 0, "close_time"],
-            y=trades.loc[trades['profitperc'] > 0, "close_rate"],
-            text=trades.loc[trades['profitperc'] > 0, "desc"],
+            x=trades.loc[trades['profit_percent'] > 0, "close_time"],
+            y=trades.loc[trades['profit_percent'] > 0, "close_rate"],
+            text=trades.loc[trades['profit_percent'] > 0, "desc"],
             mode='markers',
             name='Sell - Profit',
             marker=dict(
@@ -193,9 +194,9 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
             )
         )
         trade_sells_loss = go.Scatter(
-            x=trades.loc[trades['profitperc'] <= 0, "close_time"],
-            y=trades.loc[trades['profitperc'] <= 0, "close_rate"],
-            text=trades.loc[trades['profitperc'] <= 0, "desc"],
+            x=trades.loc[trades['profit_percent'] <= 0, "close_time"],
+            y=trades.loc[trades['profit_percent'] <= 0, "close_rate"],
+            text=trades.loc[trades['profit_percent'] <= 0, "desc"],
             mode='markers',
             name='Sell - Loss',
             marker=dict(
@@ -451,9 +452,12 @@ def generate_profit_graph(pairs: str, data: Dict[str, pd.DataFrame],
 
     for pair in pairs:
         profit_col = f'cum_profit_{pair}'
-        df_comb = create_cum_profit(df_comb, trades[trades['pair'] == pair], profit_col, timeframe)
-
-        fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
+        try:
+            df_comb = create_cum_profit(df_comb, trades[trades['pair'] == pair], profit_col,
+                                        timeframe)
+            fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
+        except ValueError:
+            pass
 
     return fig
 
@@ -541,6 +545,9 @@ def plot_profit(config: Dict[str, Any]) -> None:
     trades = trades[(trades['pair'].isin(plot_elements["pairs"]))
                     & (~trades['close_time'].isnull())
                     ]
+    if len(trades) == 0:
+        raise OperationalException("No trades found, cannot generate Profit-plot without "
+                                   "trades from either Backtest result or database.")
 
     # Create an average close price of all the pairs that were involved.
     # this could be useful to gauge the overall market trend
