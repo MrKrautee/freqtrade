@@ -4,6 +4,7 @@ Precision pair list filter
 import logging
 from typing import Any, Dict
 
+from freqtrade.exceptions import OperationalException
 from freqtrade.pairlist.IPairList import IPairList
 
 
@@ -17,6 +18,10 @@ class PrecisionFilter(IPairList):
                  pairlist_pos: int) -> None:
         super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
 
+        if 'stoploss' not in self._config:
+            raise OperationalException(
+                'PrecisionFilter can only work with stoploss defined. Please add the '
+                'stoploss key to your configuration (overwrites eventual strategy settings).')
         self._stoploss = self._config['stoploss']
         self._enabled = self._stoploss != 0
 
@@ -27,7 +32,7 @@ class PrecisionFilter(IPairList):
     def needstickers(self) -> bool:
         """
         Boolean property defining if tickers are necessary.
-        If no Pairlist requries tickers, an empty List is passed
+        If no Pairlist requires tickers, an empty List is passed
         as tickers argument to filter_pairlist
         """
         return True

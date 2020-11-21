@@ -11,11 +11,11 @@ from inspect import getfullargspec
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from freqtrade.constants import (REQUIRED_ORDERTIF, REQUIRED_ORDERTYPES,
-                                 USERPATH_STRATEGIES)
+from freqtrade.constants import REQUIRED_ORDERTIF, REQUIRED_ORDERTYPES, USERPATH_STRATEGIES
 from freqtrade.exceptions import OperationalException
 from freqtrade.resolvers import IResolver
 from freqtrade.strategy.interface import IStrategy
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,19 @@ class StrategyResolver(IResolver):
         if 'ask_strategy' not in config:
             config['ask_strategy'] = {}
 
+        if hasattr(strategy, 'ticker_interval') and not hasattr(strategy, 'timeframe'):
+            # Assign ticker_interval to timeframe to keep compatibility
+            if 'timeframe' not in config:
+                logger.warning(
+                    "DEPRECATED: Please migrate to using 'timeframe' instead of 'ticker_interval'."
+                    )
+                strategy.timeframe = strategy.ticker_interval
+
         # Set attributes
         # Check if we need to override configuration
         #             (Attribute name,                    default,     subkey)
         attributes = [("minimal_roi",                     {"0": 10.0}, None),
-                      ("ticker_interval",                 None,        None),
+                      ("timeframe",                       None,        None),
                       ("stoploss",                        None,        None),
                       ("trailing_stop",                   None,        None),
                       ("trailing_stop_positive",          None,        None),
@@ -79,6 +87,9 @@ class StrategyResolver(IResolver):
             else:
                 StrategyResolver._override_attribute_helper(strategy, config,
                                                             attribute, default)
+
+        # Assign deprecated variable - to not break users code relying on this.
+        strategy.ticker_interval = strategy.timeframe
 
         # Loop this list again to have output combined
         for attribute, _, subkey in attributes:
@@ -163,7 +174,9 @@ class StrategyResolver(IResolver):
 
         strategy = StrategyResolver._load_object(paths=abs_paths,
                                                  object_name=strategy_name,
-                                                 kwargs={'config': config})
+                                                 add_source=True,
+                                                 kwargs={'config': config},
+                                                 )
         if strategy:
             strategy._populate_fun_len = len(getfullargspec(strategy.populate_indicators).args)
             strategy._buy_fun_len = len(getfullargspec(strategy.populate_buy_trend).args)

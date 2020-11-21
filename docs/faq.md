@@ -1,5 +1,9 @@
 # Freqtrade FAQ
 
+## Beginner Tips & Tricks
+
+* When you work with your strategy & hyperopt file you should use a proper code editor like vscode or Pycharm. A good code editor will provide syntax highlighting as well as line numbers, making it easy to find syntax errors (most likely, pointed out by Freqtrade during startup).
+
 ## Freqtrade common issues
 
 ### The bot does not start
@@ -15,9 +19,11 @@ This could have the following reasons:
 
 ### I have waited 5 minutes, why hasn't the bot made any trades yet?!
 
-Depending on the buy strategy, the amount of whitelisted coins, the
+* Depending on the buy strategy, the amount of whitelisted coins, the
 situation of the market etc, it can take up to hours to find good entry
 position for a trade. Be patient!
+
+* Or it may because of a configuration error? Best check the logs, it's usually telling you if the bot is simply not getting buy signals (only heartbeat messages), or if there is something wrong (errors / exceptions in the log).
 
 ### I have made 12 trades already, why is my total profit negative?!
 
@@ -45,6 +51,20 @@ the tutorial [here|Testing-new-strategies-with-Hyperopt](bot-usage.md#hyperopt-c
 
 You can use the `/forcesell all` command from Telegram.
 
+### I want to run multiple bots on the same machine
+
+Please look at the [advanced setup documentation Page](advanced-setup.md#running-multiple-instances-of-freqtrade).
+
+### I'm getting "Missing data fillup" messages in the log
+
+This message is just a warning that the latest candles had missing candles in them.
+Depending on the exchange, this can indicate that the pair didn't have a trade for the timeframe you are using - and the exchange does only return candles with volume.
+On low volume pairs, this is a rather common occurance.
+
+If this happens for all pairs in the pairlist, this might indicate a recent exchange downtime. Please check your exchange's public channels for details.
+
+Irrespectively of the reason, Freqtrade will fill up these candles with "empty" candles, where open, high, low and close are set to the previous candle close - and volume is empty. In a chart, this will look like a `_` - and is aligned with how exchanges usually represent 0 volume candles.
+
 ### I'm getting the "RESTRICTED_MARKET" message in the log
 
 Currently known to happen for US Bittrex users.  
@@ -69,7 +89,7 @@ Same fix should be done in the configuration file, if order types are defined in
 
 ### How do I search the bot logs for something?
 
-By default, the bot writes its log into stderr stream. This is implemented this way so that you can easily separate the bot's diagnostics messages from Backtesting, Edge and Hyperopt results, output from other various Freqtrade utility subcommands, as well as from the output of your custom `print()`'s you may have inserted into your strategy. So if you need to search the log messages with the grep utility, you need to redirect stderr to stdout and disregard stdout.
+By default, the bot writes its log into stderr stream. This is implemented this way so that you can easily separate the bot's diagnostics messages from Backtesting, Edge and Hyperopt results, output from other various Freqtrade utility sub-commands, as well as from the output of your custom `print()`'s you may have inserted into your strategy. So if you need to search the log messages with the grep utility, you need to redirect stderr to stdout and disregard stdout.
 
 * In unix shells, this normally can be done as simple as:
 ```shell
@@ -94,7 +114,7 @@ and then grep it as:
 ```shell
 $ cat /path/to/mylogfile.log | grep 'something'
 ```
-or even on the fly, as the bot works and the logfile grows:
+or even on the fly, as the bot works and the log file grows:
 ```shell
 $ tail -f /path/to/mylogfile.log | grep 'something'
 ```
@@ -115,25 +135,21 @@ to find a great result (unless if you are very lucky), so you probably
 have to run it for 10.000 or more. But it will take an eternity to
 compute.
 
-We recommend you to run it at least 10.000 epochs:
+Since hyperopt uses Bayesian search, running for too many epochs may not produce greater results.
+
+It's therefore recommended to run between 500-1000 epochs over and over until you hit at least 10.000 epochs in total (or are satisfied with the result). You can best judge by looking at the results - if the bot keeps discovering better strategies, it's best to keep on going.
 
 ```bash
-freqtrade hyperopt -e 10000
+freqtrade hyperopt --hyperop SampleHyperopt --hyperopt-loss SharpeHyperOptLossDaily --strategy SampleStrategy -e 1000
 ```
 
-or if you want intermediate result to see
+### Why does it take a long time to run hyperopt?
 
-```bash
-for i in {1..100}; do freqtrade hyperopt -e 100; done
-```
+* Discovering a great strategy with Hyperopt takes time. Study www.freqtrade.io, the Freqtrade Documentation page, join the Freqtrade [Slack community](https://join.slack.com/t/highfrequencybot/shared_invite/zt-jaut7r4m-Y17k4x5mcQES9a9swKuxbg) - or the Freqtrade [discord community](https://discord.gg/X89cVG). While you patiently wait for the most advanced, free crypto bot in the world, to hand you a possible golden strategy specially designed just for you.
 
-### Why it is so long to run hyperopt?
+* If you wonder why it can take from 20 minutes to days to do 1000 epochs here are some answers:
 
-Finding a great Hyperopt results takes time.
-
-If you wonder why it takes a while to find great hyperopt results
-
-This answer was written during the under the release 0.15.1, when we had:
+This answer was written during the release 0.15.1, when we had:
 
 - 8 triggers
 - 9 guards: let's say we evaluate even 10 values from each
@@ -143,7 +159,14 @@ The following calculation is still very rough and not very precise
 but it will give the idea. With only these triggers and guards there is
 already 8\*10^9\*10 evaluations. A roughly total of 80 billion evals.
 Did you run 100 000 evals? Congrats, you've done roughly 1 / 100 000 th
-of the search space.
+of the search space, assuming that the bot never tests the same parameters more than once.
+
+* The time it takes to run 1000 hyperopt epochs depends on things like: The available cpu, hard-disk, ram, timeframe, timerange, indicator settings, indicator count, amount of coins that hyperopt test strategies on and the resulting trade count - which can be 650 trades in a year or 10.0000 trades depending if the strategy aims for big profits by trading rarely or for many low profit trades. 
+
+Example: 4% profit 650 times vs 0,3% profit a trade 10.000 times in a year. If we assume you set the --timerange to 365 days. 
+
+Example: 
+`freqtrade --config config.json --strategy SampleStrategy --hyperopt SampleHyperopt -e 1000 --timerange 20190601-20200601`
 
 ## Edge module
 
@@ -151,7 +174,7 @@ of the search space.
 
 The Edge module is mostly a result of brainstorming of [@mishaker](https://github.com/mishaker) and [@creslinux](https://github.com/creslinux) freqtrade team members.
 
-You can find further info on expectancy, winrate, risk management and position size in the following sources:
+You can find further info on expectancy, win rate, risk management and position size in the following sources:
 
 - https://www.tradeciety.com/ultimate-math-guide-for-traders/
 - http://www.vantharp.com/tharp-concepts/expectancy.asp

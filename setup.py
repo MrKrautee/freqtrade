@@ -1,5 +1,7 @@
 from sys import version_info
+
 from setuptools import setup
+
 
 if version_info.major == 3 and version_info.minor < 6 or \
         version_info.major < 3:
@@ -7,6 +9,7 @@ if version_info.major == 3 and version_info.minor < 6 or \
     exit(1)
 
 from pathlib import Path  # noqa: E402
+
 from freqtrade import __version__  # noqa: E402
 
 
@@ -62,11 +65,11 @@ setup(name='freqtrade',
       setup_requires=['pytest-runner', 'numpy'],
       tests_require=['pytest', 'pytest-asyncio', 'pytest-cov', 'pytest-mock', ],
       install_requires=[
-          # from requirements-common.txt
-          'ccxt>=1.18.1080',
+          # from requirements.txt
+          'ccxt>=1.24.96',
           'SQLAlchemy',
           'python-telegram-bot',
-          'arrow',
+          'arrow>=0.17.0',
           'cachetools',
           'requests',
           'urllib3',
@@ -82,9 +85,10 @@ setup(name='freqtrade',
           'jinja2',
           'questionary',
           'prompt-toolkit',
-          # from requirements.txt
           'numpy',
           'pandas',
+          'tables',
+          'blosc',
       ],
       extras_require={
           'api': api,
@@ -107,6 +111,7 @@ setup(name='freqtrade',
           'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
           'Programming Language :: Python :: 3.6',
           'Programming Language :: Python :: 3.7',
+          'Programming Language :: Python :: 3.8',
           'Operating System :: MacOS',
           'Operating System :: Unix',
           'Topic :: Office/Business :: Financial :: Investment',

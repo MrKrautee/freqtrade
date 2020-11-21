@@ -13,15 +13,12 @@ from freqtrade.configuration import TimeRange
 from freqtrade.data import history
 from freqtrade.data.btanalysis import create_cum_profit, load_backtest_data
 from freqtrade.exceptions import OperationalException
-from freqtrade.plot.plotting import (add_indicators, add_profit,
-                                     create_plotconfig,
-                                     generate_candlestick_graph,
-                                     generate_plot_filename,
-                                     generate_profit_graph, init_plotscript,
-                                     load_and_plot_trades, plot_profit,
-                                     plot_trades, store_plot_file)
+from freqtrade.plot.plotting import (add_indicators, add_profit, create_plotconfig,
+                                     generate_candlestick_graph, generate_plot_filename,
+                                     generate_profit_graph, init_plotscript, load_and_plot_trades,
+                                     plot_profit, plot_trades, store_plot_file)
 from freqtrade.resolvers import StrategyResolver
-from tests.conftest import get_args, log_has, log_has_re
+from tests.conftest import get_args, log_has, log_has_re, patch_exchange
 
 
 def fig_generating_mock(fig, *args, **kwargs):
@@ -47,16 +44,17 @@ def generate_empty_figure():
 def test_init_plotscript(default_conf, mocker, testdatadir):
     default_conf['timerange'] = "20180110-20180112"
     default_conf['trade_source'] = "file"
-    default_conf['ticker_interval'] = "5m"
+    default_conf['timeframe'] = "5m"
     default_conf["datadir"] = testdatadir
     default_conf['exportfilename'] = testdatadir / "backtest-result_test.json"
     ret = init_plotscript(default_conf)
     assert "ohlcv" in ret
     assert "trades" in ret
     assert "pairs" in ret
+    assert 'timerange' in ret
 
     default_conf['pairs'] = ["TRX/BTC", "ADA/BTC"]
-    ret = init_plotscript(default_conf)
+    ret = init_plotscript(default_conf, 20)
     assert "ohlcv" in ret
     assert "TRX/BTC" in ret["ohlcv"]
     assert "ADA/BTC" in ret["ohlcv"]
@@ -267,7 +265,7 @@ def test_generate_profit_graph(testdatadir):
     trades = load_backtest_data(filename)
     timerange = TimeRange.parse_timerange("20180110-20180112")
     pairs = ["TRX/BTC", "XLM/BTC"]
-    trades = trades[trades['close_time'] < pd.Timestamp('2018-01-12', tz='UTC')]
+    trades = trades[trades['close_date'] < pd.Timestamp('2018-01-12', tz='UTC')]
 
     data = history.load_data(datadir=testdatadir,
                              pairs=pairs,
@@ -316,6 +314,8 @@ def test_start_plot_dataframe(mocker):
 
 
 def test_load_and_plot_trades(default_conf, mocker, caplog, testdatadir):
+    patch_exchange(mocker)
+
     default_conf['trade_source'] = 'file'
     default_conf["datadir"] = testdatadir
     default_conf['exportfilename'] = testdatadir / "backtest-result_test.json"
@@ -360,22 +360,22 @@ def test_start_plot_profit(mocker):
 def test_start_plot_profit_error(mocker):
 
     args = [
-        "plot-profit",
-        "--pairs", "ETH/BTC"
+        'plot-profit',
+        '--pairs', 'ETH/BTC'
     ]
     argsp = get_args(args)
     # Make sure we use no config. Details: #2241
     # not resetting config causes random failures if config.json exists
-    argsp["config"] = []
+    argsp['config'] = []
     with pytest.raises(OperationalException):
         start_plot_profit(argsp)
 
 
 def test_plot_profit(default_conf, mocker, testdatadir, caplog):
     default_conf['trade_source'] = 'file'
-    default_conf["datadir"] = testdatadir
-    default_conf['exportfilename'] = testdatadir / "backtest-result_test_nofile.json"
-    default_conf['pairs'] = ["ETH/BTC", "LTC/BTC"]
+    default_conf['datadir'] = testdatadir
+    default_conf['exportfilename'] = testdatadir / 'backtest-result_test_nofile.json'
+    default_conf['pairs'] = ['ETH/BTC', 'LTC/BTC']
 
     profit_mock = MagicMock()
     store_mock = MagicMock()

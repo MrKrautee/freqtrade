@@ -8,7 +8,7 @@
 <!-- Place this tag where you want the button to render. -->
 <a class="github-button" href="https://github.com/freqtrade/freqtrade/fork" data-icon="octicon-repo-forked" data-size="large" aria-label="Fork freqtrade/freqtrade on GitHub">Fork</a>
 <!-- Place this tag where you want the button to render. -->
-<a class="github-button" href="https://github.com/freqtrade/freqtrade/archive/master.zip" data-icon="octicon-cloud-download" data-size="large" aria-label="Download freqtrade/freqtrade on GitHub">Download</a>
+<a class="github-button" href="https://github.com/freqtrade/freqtrade/archive/stable.zip" data-icon="octicon-cloud-download" data-size="large" aria-label="Download freqtrade/freqtrade on GitHub">Download</a>
 <!-- Place this tag where you want the button to render. -->
 <a class="github-button" href="https://github.com/freqtrade" data-size="large" aria-label="Follow @freqtrade on GitHub">Follow @freqtrade</a>
 
@@ -37,13 +37,9 @@ Freqtrade is a crypto-currency algorithmic trading software developed in python 
 
 ## Requirements
 
-### Up to date clock
-
-The clock on the system running the bot must be accurate, synchronized to a NTP server frequently enough to avoid problems with communication to the exchanges.
-
 ### Hardware requirements
 
-To run this bot we recommend you a cloud instance with a minimum of:
+To run this bot we recommend you a linux cloud instance with a minimum of:
 
 - 2GB RAM
 - 1GB disk space
@@ -63,11 +59,14 @@ Alternatively
 
 ## Support
 
-### Help / Slack
-For any questions not covered by the documentation or for further information about the bot, we encourage you to join our passionate  Slack community.
+### Help / Discord / Slack
 
-Click [here](https://join.slack.com/t/highfrequencybot/shared_invite/enQtNjU5ODcwNjI1MDU3LTU1MTgxMjkzNmYxNWE1MDEzYzQ3YmU4N2MwZjUyNjJjODRkMDVkNjg4YTAyZGYzYzlhOTZiMTE4ZjQ4YzM0OGE) to join the Freqtrade Slack channel.
+For any questions not covered by the documentation or for further information about the bot, or to simply engage with like-minded individuals, we encourage you to join our slack channel.
+
+Please check out our [discord server](https://discord.gg/MA9v74M).
+
+You can also join our [Slack channel](https://join.slack.com/t/highfrequencybot/shared_invite/zt-jaut7r4m-Y17k4x5mcQES9a9swKuxbg).
 
 ## Ready to try?
 
-Begin by reading our installation guide [for docker](docker.md), or for [installation without docker](installation.md).
+Begin by reading our installation guide [for docker](docker_quickstart.md) (recommended), or for [installation without docker](installation.md).

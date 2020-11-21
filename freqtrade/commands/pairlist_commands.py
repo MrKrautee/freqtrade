@@ -7,6 +7,7 @@ from freqtrade.configuration import setup_utils_configuration
 from freqtrade.resolvers import ExchangeResolver
 from freqtrade.state import RunMode
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +26,6 @@ def start_test_pairlist(args: Dict[str, Any]) -> None:
     results = {}
     for curr in quote_currencies:
         config['stake_currency'] = curr
-        # Do not use ticker_interval set in the config
         pairlists = PairListManager(exchange, config)
         pairlists.refresh_pairlist()
         results[curr] = pairlists.whitelist
