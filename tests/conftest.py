@@ -13,15 +13,18 @@ import numpy as np
 import pytest
 from telegram import Chat, Message, Update
 
-from freqtrade import constants, persistence
+from freqtrade import constants
 from freqtrade.commands import Arguments
 from freqtrade.data.converter import ohlcv_to_dataframe
 from freqtrade.edge import Edge, PairInfo
 from freqtrade.exchange import Exchange
 from freqtrade.freqtradebot import FreqtradeBot
-from freqtrade.persistence import Trade
+from freqtrade.persistence import Trade, init_db
 from freqtrade.resolvers import ExchangeResolver
 from freqtrade.worker import Worker
+from tests.conftest_trades import (mock_trade_1, mock_trade_2, mock_trade_3, mock_trade_4,
+                                   mock_trade_5, mock_trade_6)
+
 
 logging.getLogger('').setLevel(logging.INFO)
 
@@ -56,6 +59,7 @@ def patched_configuration_load_config_file(mocker, config) -> None:
 
 
 def patch_exchange(mocker, api_mock=None, id='bittrex', mock_markets=True) -> None:
+    mocker.patch('freqtrade.exchange.Exchange._load_async_markets', MagicMock(return_value={}))
     mocker.patch('freqtrade.exchange.Exchange._load_markets', MagicMock(return_value={}))
     mocker.patch('freqtrade.exchange.Exchange.validate_pairs', MagicMock())
     mocker.patch('freqtrade.exchange.Exchange.validate_timeframes', MagicMock())
@@ -77,7 +81,7 @@ def patch_exchange(mocker, api_mock=None, id='bittrex', mock_markets=True) -> No
 def get_patched_exchange(mocker, config, api_mock=None, id='bittrex',
                          mock_markets=True) -> Exchange:
     patch_exchange(mocker, api_mock, id, mock_markets)
-    config["exchange"]["name"] = id
+    config['exchange']['name'] = id
     try:
         exchange = ExchangeResolver.load_exchange(id, config)
     except ImportError:
@@ -92,7 +96,7 @@ def patch_wallet(mocker, free=999.9) -> None:
 
 
 def patch_whitelist(mocker, conf) -> None:
-    mocker.patch('freqtrade.freqtradebot.FreqtradeBot._refresh_whitelist',
+    mocker.patch('freqtrade.freqtradebot.FreqtradeBot._refresh_active_whitelist',
                  MagicMock(return_value=conf['exchange']['pair_whitelist']))
 
 
@@ -127,7 +131,7 @@ def patch_freqtradebot(mocker, config) -> None:
     :return: None
     """
     mocker.patch('freqtrade.freqtradebot.RPCManager', MagicMock())
-    persistence.init(config['db_url'])
+    init_db(config['db_url'])
     patch_exchange(mocker)
     mocker.patch('freqtrade.freqtradebot.RPCManager._init', MagicMock())
     mocker.patch('freqtrade.freqtradebot.RPCManager.send_msg', MagicMock())
@@ -142,6 +146,7 @@ def get_patched_freqtradebot(mocker, config) -> FreqtradeBot:
     :return: FreqtradeBot
     """
     patch_freqtradebot(mocker, config)
+    config['datadir'] = Path(config['datadir'])
     return FreqtradeBot(config)
 
 
@@ -162,7 +167,7 @@ def patch_get_signal(freqtrade: FreqtradeBot, value=(True, False)) -> None:
     :param value: which value IStrategy.get_signal() must return
     :return: None
     """
-    freqtrade.strategy.get_signal = lambda e, s, t: value
+    freqtrade.strategy.get_signal = lambda e, s, x: value
     freqtrade.exchange.refresh_latest_ohlcv = lambda p: None
 
 
@@ -171,44 +176,22 @@ def create_mock_trades(fee):
     Create some fake trades ...
     """
     # Simulate dry_run entries
-    trade = Trade(
-        pair='ETH/BTC',
-        stake_amount=0.001,
-        amount=123.0,
-        fee_open=fee.return_value,
-        fee_close=fee.return_value,
-        open_rate=0.123,
-        exchange='bittrex',
-        open_order_id='dry_run_buy_12345'
-    )
+    trade = mock_trade_1(fee)
     Trade.session.add(trade)
 
-    trade = Trade(
-        pair='ETC/BTC',
-        stake_amount=0.001,
-        amount=123.0,
-        fee_open=fee.return_value,
-        fee_close=fee.return_value,
-        open_rate=0.123,
-        close_rate=0.128,
-        close_profit=0.005,
-        exchange='bittrex',
-        is_open=False,
-        open_order_id='dry_run_sell_12345'
-    )
+    trade = mock_trade_2(fee)
     Trade.session.add(trade)
 
-    # Simulate prod entry
-    trade = Trade(
-        pair='ETC/BTC',
-        stake_amount=0.001,
-        amount=123.0,
-        fee_open=fee.return_value,
-        fee_close=fee.return_value,
-        open_rate=0.123,
-        exchange='bittrex',
-        open_order_id='prod_buy_12345'
-    )
+    trade = mock_trade_3(fee)
+    Trade.session.add(trade)
+
+    trade = mock_trade_4(fee)
+    Trade.session.add(trade)
+
+    trade = mock_trade_5(fee)
+    Trade.session.add(trade)
+
+    trade = mock_trade_6(fee)
     Trade.session.add(trade)
 
 
@@ -236,7 +219,7 @@ def patch_coingekko(mocker) -> None:
 
 @pytest.fixture(scope='function')
 def init_persistence(default_conf):
-    persistence.init(default_conf['db_url'], default_conf['dry_run'])
+    init_db(default_conf['db_url'], default_conf['dry_run'])
 
 
 @pytest.fixture(scope="function")
@@ -247,7 +230,7 @@ def default_conf(testdatadir):
         "stake_currency": "BTC",
         "stake_amount": 0.001,
         "fiat_display_currency": "USD",
-        "ticker_interval": '5m',
+        "timeframe": '5m',
         "dry_run": True,
         "cancel_open_orders_on_exit": False,
         "minimal_roi": {
@@ -314,7 +297,7 @@ def default_conf(testdatadir):
 @pytest.fixture
 def update():
     _update = Update(0)
-    _update.message = Message(0, 0, datetime.utcnow(), Chat(0, 0))
+    _update.message = Message(0, datetime.utcnow(), Chat(0, 0))
     return _update
 
 
@@ -660,7 +643,8 @@ def shitcoinmarkets(markets):
     Fixture with shitcoin markets - used to test filters in pairlists
     """
     shitmarkets = deepcopy(markets)
-    shitmarkets.update({'HOT/BTC': {
+    shitmarkets.update({
+        'HOT/BTC': {
             'id': 'HOTBTC',
             'symbol': 'HOT/BTC',
             'base': 'HOT',
@@ -765,7 +749,32 @@ def shitcoinmarkets(markets):
             "spot": True,
             "future": False,
             "active": True
-    },
+        },
+        'ADADOUBLE/USDT': {
+            "percentage": True,
+            "tierBased": False,
+            "taker": 0.001,
+            "maker": 0.001,
+            "precision": {
+                "base": 8,
+                "quote": 8,
+                "amount": 2,
+                "price": 4
+            },
+            "limits": {
+            },
+            "id": "ADADOUBLEUSDT",
+            "symbol": "ADADOUBLE/USDT",
+            "base": "ADADOUBLE",
+            "quote": "USDT",
+            "baseId": "ADADOUBLE",
+            "quoteId": "USDT",
+            "info": {},
+            "type": "spot",
+            "spot": True,
+            "future": False,
+            "active": True
+        },
         })
     return shitmarkets
 
@@ -776,19 +785,30 @@ def markets_empty():
 
 
 @pytest.fixture(scope='function')
-def limit_buy_order():
+def limit_buy_order_open():
     return {
         'id': 'mocked_limit_buy',
         'type': 'limit',
         'side': 'buy',
         'symbol': 'mocked',
         'datetime': arrow.utcnow().isoformat(),
+        'timestamp': arrow.utcnow().int_timestamp,
         'price': 0.00001099,
         'amount': 90.99181073,
-        'filled': 90.99181073,
-        'remaining': 0.0,
-        'status': 'closed'
+        'filled': 0.0,
+        'cost': 0.0009999,
+        'remaining': 90.99181073,
+        'status': 'open'
     }
+
+
+@pytest.fixture(scope='function')
+def limit_buy_order(limit_buy_order_open):
+    order = deepcopy(limit_buy_order_open)
+    order['status'] = 'closed'
+    order['filled'] = order['amount']
+    order['remaining'] = 0.0
+    return order
 
 
 @pytest.fixture(scope='function')
@@ -891,7 +911,7 @@ def limit_buy_order_canceled_empty(request):
             'info': {},
             'id': '1234512345',
             'clientOrderId': None,
-            'timestamp': arrow.utcnow().shift(minutes=-601).timestamp,
+            'timestamp': arrow.utcnow().shift(minutes=-601).int_timestamp,
             'datetime': arrow.utcnow().shift(minutes=-601).isoformat(),
             'lastTradeTimestamp': None,
             'symbol': 'LTC/USDT',
@@ -912,7 +932,7 @@ def limit_buy_order_canceled_empty(request):
             'info': {},
             'id': 'AZNPFF-4AC4N-7MKTAT',
             'clientOrderId': None,
-            'timestamp': arrow.utcnow().shift(minutes=-601).timestamp,
+            'timestamp': arrow.utcnow().shift(minutes=-601).int_timestamp,
             'datetime': arrow.utcnow().shift(minutes=-601).isoformat(),
             'lastTradeTimestamp': None,
             'status': 'canceled',
@@ -933,7 +953,7 @@ def limit_buy_order_canceled_empty(request):
             'info': {},
             'id': '1234512345',
             'clientOrderId': 'alb1234123',
-            'timestamp': arrow.utcnow().shift(minutes=-601).timestamp,
+            'timestamp': arrow.utcnow().shift(minutes=-601).int_timestamp,
             'datetime': arrow.utcnow().shift(minutes=-601).isoformat(),
             'lastTradeTimestamp': None,
             'symbol': 'LTC/USDT',
@@ -954,7 +974,7 @@ def limit_buy_order_canceled_empty(request):
             'info': {},
             'id': '1234512345',
             'clientOrderId': 'alb1234123',
-            'timestamp': arrow.utcnow().shift(minutes=-601).timestamp,
+            'timestamp': arrow.utcnow().shift(minutes=-601).int_timestamp,
             'datetime': arrow.utcnow().shift(minutes=-601).isoformat(),
             'lastTradeTimestamp': None,
             'symbol': 'LTC/USDT',
@@ -973,19 +993,29 @@ def limit_buy_order_canceled_empty(request):
 
 
 @pytest.fixture
-def limit_sell_order():
+def limit_sell_order_open():
     return {
         'id': 'mocked_limit_sell',
         'type': 'limit',
         'side': 'sell',
         'pair': 'mocked',
         'datetime': arrow.utcnow().isoformat(),
+        'timestamp': arrow.utcnow().int_timestamp,
         'price': 0.00001173,
         'amount': 90.99181073,
-        'filled': 90.99181073,
-        'remaining': 0.0,
-        'status': 'closed'
+        'filled': 0.0,
+        'remaining': 90.99181073,
+        'status': 'open'
     }
+
+
+@pytest.fixture
+def limit_sell_order(limit_sell_order_open):
+    order = deepcopy(limit_sell_order_open)
+    order['remaining'] = 0.0
+    order['filled'] = order['amount']
+    order['status'] = 'closed'
+    return order
 
 
 @pytest.fixture
@@ -1054,7 +1084,7 @@ def ohlcv_history_list():
 @pytest.fixture
 def ohlcv_history(ohlcv_history_list):
     return ohlcv_to_dataframe(ohlcv_history_list, "5m", pair="UNITTEST/BTC",
-                              fill_missing=True)
+                              fill_missing=True, drop_incomplete=False)
 
 
 @pytest.fixture
@@ -1386,6 +1416,28 @@ def tickers():
             "quoteVolume": 0.0,
             "info": {}
         },
+        "ADADOUBLE/USDT": {
+            "symbol": "ADADOUBLE/USDT",
+            "timestamp": 1580469388244,
+            "datetime": "2020-01-31T11:16:28.244Z",
+            "high": None,
+            "low": None,
+            "bid": 0.7305,
+            "bidVolume": None,
+            "ask": 0.7342,
+            "askVolume": None,
+            "vwap": None,
+            "open": None,
+            "close": None,
+            "last": 0,
+            "previousClose": None,
+            "change": None,
+            "percentage": 2.628,
+            "average": None,
+            "baseVolume": 0.0,
+            "quoteVolume": 0.0,
+            "info": {}
+        },
     })
 
 
@@ -1423,7 +1475,7 @@ def trades_for_order():
 
 @pytest.fixture(scope="function")
 def trades_history():
-    return [[1565798399463, '126181329', None, 'buy', 0.019627, 0.04, 0.00078508],
+    return [[1565798389463, '126181329', None, 'buy', 0.019627, 0.04, 0.00078508],
             [1565798399629, '126181330', None, 'buy', 0.019627, 0.244, 0.004788987999999999],
             [1565798399752, '126181331', None, 'sell', 0.019626, 0.011, 0.00021588599999999999],
             [1565798399862, '126181332', None, 'sell', 0.019626, 0.011, 0.00021588599999999999],
@@ -1536,16 +1588,7 @@ def fetch_trades_result():
 
 @pytest.fixture(scope="function")
 def trades_for_order2():
-    return [{'info': {'id': 34567,
-                      'orderId': 123456,
-                      'price': '0.24544100',
-                      'qty': '8.00000000',
-                      'commission': '0.00800000',
-                      'commissionAsset': 'LTC',
-                      'time': 1521663363189,
-                      'isBuyer': True,
-                      'isMaker': False,
-                      'isBestMatch': True},
+    return [{'info': {},
              'timestamp': 1521663363189,
              'datetime': '2018-03-21T20:16:03.189Z',
              'symbol': 'LTC/ETH',
@@ -1557,16 +1600,7 @@ def trades_for_order2():
              'cost': 1.963528,
              'amount': 4.0,
              'fee': {'cost': 0.004, 'currency': 'LTC'}},
-            {'info': {'id': 34567,
-                      'orderId': 123456,
-                      'price': '0.24544100',
-                      'qty': '8.00000000',
-                      'commission': '0.00800000',
-                      'commissionAsset': 'LTC',
-                      'time': 1521663363189,
-                      'isBuyer': True,
-                      'isMaker': False,
-                      'isBestMatch': True},
+            {'info': {},
              'timestamp': 1521663363189,
              'datetime': '2018-03-21T20:16:03.189Z',
              'symbol': 'LTC/ETH',
@@ -1580,6 +1614,14 @@ def trades_for_order2():
              'fee': {'cost': 0.004, 'currency': 'LTC'}}]
 
 
+@pytest.fixture(scope="function")
+def trades_for_order3(trades_for_order2):
+    # Different fee currencies for each trade
+    trades_for_order = deepcopy(trades_for_order2)
+    trades_for_order[0]['fee'] = {'cost': 0.02, 'currency': 'BNB'}
+    return trades_for_order
+
+
 @pytest.fixture
 def buy_order_fee():
     return {
@@ -1590,6 +1632,7 @@ def buy_order_fee():
         'datetime': str(arrow.utcnow().shift(minutes=-601).datetime),
         'price': 0.245441,
         'amount': 8.0,
+        'cost': 1.963528,
         'remaining': 90.99181073,
         'status': 'closed',
         'fee': None
@@ -1705,7 +1748,7 @@ def hyperopt_results():
         {
             'loss': 0.4366182531161519,
             'params_dict': {
-            'mfi-value': 15, 'fastd-value': 20, 'adx-value': 25, 'rsi-value': 28, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal', 'sell-mfi-value': 88, 'sell-fastd-value': 97, 'sell-adx-value': 51, 'sell-rsi-value': 67, 'sell-mfi-enabled': False, 'sell-fastd-enabled': False, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-bb_upper', 'roi_t1': 1190, 'roi_t2': 541, 'roi_t3': 408, 'roi_p1': 0.026035863879169705, 'roi_p2': 0.12508730043628782, 'roi_p3': 0.27766427921605896, 'stoploss': -0.2562930402099556},  # noqa: E501
+                'mfi-value': 15, 'fastd-value': 20, 'adx-value': 25, 'rsi-value': 28, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal', 'sell-mfi-value': 88, 'sell-fastd-value': 97, 'sell-adx-value': 51, 'sell-rsi-value': 67, 'sell-mfi-enabled': False, 'sell-fastd-enabled': False, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-bb_upper', 'roi_t1': 1190, 'roi_t2': 541, 'roi_t3': 408, 'roi_p1': 0.026035863879169705, 'roi_p2': 0.12508730043628782, 'roi_p3': 0.27766427921605896, 'stoploss': -0.2562930402099556},  # noqa: E501
             'params_details': {'buy': {'mfi-value': 15, 'fastd-value': 20, 'adx-value': 25, 'rsi-value': 28, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal'}, 'sell': {'sell-mfi-value': 88, 'sell-fastd-value': 97, 'sell-adx-value': 51, 'sell-rsi-value': 67, 'sell-mfi-enabled': False, 'sell-fastd-enabled': False, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-bb_upper'}, 'roi': {0: 0.4287874435315165, 408: 0.15112316431545753, 949: 0.026035863879169705, 2139: 0}, 'stoploss': {'stoploss': -0.2562930402099556}},  # noqa: E501
             'results_metrics': {'trade_count': 2, 'avg_profit': -1.254995, 'total_profit': -0.00125625, 'profit': -2.50999, 'duration': 3930.0},  # noqa: E501
             'results_explanation': '     2 trades. Avg profit  -1.25%. Total profit -0.00125625 BTC (  -2.51Σ%). Avg duration 3930.0 min.',  # noqa: E501
@@ -1716,11 +1759,12 @@ def hyperopt_results():
         }, {
             'loss': 20.0,
             'params_dict': {
-            'mfi-value': 17, 'fastd-value': 38, 'adx-value': 48, 'rsi-value': 22, 'mfi-enabled': True, 'fastd-enabled': False, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal', 'sell-mfi-value': 96, 'sell-fastd-value': 68, 'sell-adx-value': 63, 'sell-rsi-value': 81, 'sell-mfi-enabled': False, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-sar_reversal', 'roi_t1': 334, 'roi_t2': 683, 'roi_t3': 140, 'roi_p1': 0.06403981740598495, 'roi_p2': 0.055519840060645045, 'roi_p3': 0.3253712811342459, 'stoploss': -0.338070047333259},  # noqa: E501
-            'params_details': {'buy': {'mfi-value': 17, 'fastd-value': 38, 'adx-value': 48, 'rsi-value': 22, 'mfi-enabled': True, 'fastd-enabled': False, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal'},  # noqa: E501
-            'sell': {'sell-mfi-value': 96, 'sell-fastd-value': 68, 'sell-adx-value': 63, 'sell-rsi-value': 81, 'sell-mfi-enabled': False, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-sar_reversal'},  # noqa: E501
-            'roi': {0: 0.4449309386008759, 140: 0.11955965746663, 823: 0.06403981740598495, 1157: 0},  # noqa: E501
-            'stoploss': {'stoploss': -0.338070047333259}},
+                'mfi-value': 17, 'fastd-value': 38, 'adx-value': 48, 'rsi-value': 22, 'mfi-enabled': True, 'fastd-enabled': False, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal', 'sell-mfi-value': 96, 'sell-fastd-value': 68, 'sell-adx-value': 63, 'sell-rsi-value': 81, 'sell-mfi-enabled': False, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-sar_reversal', 'roi_t1': 334, 'roi_t2': 683, 'roi_t3': 140, 'roi_p1': 0.06403981740598495, 'roi_p2': 0.055519840060645045, 'roi_p3': 0.3253712811342459, 'stoploss': -0.338070047333259},  # noqa: E501
+            'params_details': {
+                'buy': {'mfi-value': 17, 'fastd-value': 38, 'adx-value': 48, 'rsi-value': 22, 'mfi-enabled': True, 'fastd-enabled': False, 'adx-enabled': True, 'rsi-enabled': True, 'trigger': 'macd_cross_signal'},  # noqa: E501
+                'sell': {'sell-mfi-value': 96, 'sell-fastd-value': 68, 'sell-adx-value': 63, 'sell-rsi-value': 81, 'sell-mfi-enabled': False, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': True, 'sell-trigger': 'sell-sar_reversal'},  # noqa: E501
+                'roi': {0: 0.4449309386008759, 140: 0.11955965746663, 823: 0.06403981740598495, 1157: 0},  # noqa: E501
+                'stoploss': {'stoploss': -0.338070047333259}},
             'results_metrics': {'trade_count': 1, 'avg_profit': 0.12357, 'total_profit': 6.185e-05, 'profit': 0.12357, 'duration': 1200.0},  # noqa: E501
             'results_explanation': '     1 trades. Avg profit   0.12%. Total profit  0.00006185 BTC (   0.12Σ%). Avg duration 1200.0 min.',  # noqa: E501
             'total_profit': 6.185e-05,
@@ -1767,8 +1811,9 @@ def hyperopt_results():
         }, {
             'loss': 4.713497421432944,
             'params_dict': {'mfi-value': 13, 'fastd-value': 41, 'adx-value': 21, 'rsi-value': 29, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': False, 'rsi-enabled': False, 'trigger': 'bb_lower', 'sell-mfi-value': 99, 'sell-fastd-value': 60, 'sell-adx-value': 81, 'sell-rsi-value': 69, 'sell-mfi-enabled': True, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': False, 'sell-trigger': 'sell-macd_cross_signal', 'roi_t1': 771, 'roi_t2': 620, 'roi_t3': 145, 'roi_p1': 0.0586919200378493, 'roi_p2': 0.04984118697312542, 'roi_p3': 0.37521058680247044, 'stoploss': -0.14613268022709905},  # noqa: E501
-            'params_details': {'buy': {'mfi-value': 13, 'fastd-value': 41, 'adx-value': 21, 'rsi-value': 29, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': False, 'rsi-enabled': False, 'trigger': 'bb_lower'}, 'sell': {'sell-mfi-value': 99, 'sell-fastd-value': 60, 'sell-adx-value': 81, 'sell-rsi-value': 69, 'sell-mfi-enabled': True, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': False, 'sell-trigger': 'sell-macd_cross_signal'}, 'roi': {0: 0.4837436938134452, 145: 0.10853310701097472, 765: 0.0586919200378493, 1536: 0},  # noqa: E501
-            'stoploss': {'stoploss': -0.14613268022709905}},  # noqa: E501
+            'params_details': {
+                'buy': {'mfi-value': 13, 'fastd-value': 41, 'adx-value': 21, 'rsi-value': 29, 'mfi-enabled': False, 'fastd-enabled': True, 'adx-enabled': False, 'rsi-enabled': False, 'trigger': 'bb_lower'}, 'sell': {'sell-mfi-value': 99, 'sell-fastd-value': 60, 'sell-adx-value': 81, 'sell-rsi-value': 69, 'sell-mfi-enabled': True, 'sell-fastd-enabled': True, 'sell-adx-enabled': True, 'sell-rsi-enabled': False, 'sell-trigger': 'sell-macd_cross_signal'}, 'roi': {0: 0.4837436938134452, 145: 0.10853310701097472, 765: 0.0586919200378493, 1536: 0},  # noqa: E501
+                'stoploss': {'stoploss': -0.14613268022709905}},  # noqa: E501
             'results_metrics': {'trade_count': 318, 'avg_profit': -0.39833954716981146, 'total_profit': -0.06339929, 'profit': -126.67197600000004, 'duration': 3140.377358490566},  # noqa: E501
             'results_explanation': '   318 trades. Avg profit  -0.40%. Total profit -0.06339929 BTC (-126.67Σ%). Avg duration 3140.4 min.',  # noqa: E501
             'total_profit': -0.06339929,

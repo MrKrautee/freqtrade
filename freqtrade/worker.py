@@ -15,6 +15,7 @@ from freqtrade.exceptions import OperationalException, TemporaryError
 from freqtrade.freqtradebot import FreqtradeBot
 from freqtrade.state import State
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,9 +38,7 @@ class Worker:
         self._heartbeat_msg: float = 0
 
         # Tell systemd that we completed initialization phase
-        if self._sd_notify:
-            logger.debug("sd_notify: READY=1")
-            self._sd_notify.notify("READY=1")
+        self._notify("READY=1")
 
     def _init(self, reconfig: bool) -> None:
         """
@@ -60,11 +59,20 @@ class Worker:
         self._sd_notify = sdnotify.SystemdNotifier() if \
             self._config.get('internals', {}).get('sd_notify', False) else None
 
+    def _notify(self, message: str) -> None:
+        """
+        Removes the need to verify in all occurances if sd_notify is enabled
+        :param message: Message to send to systemd if it's enabled.
+        """
+        if self._sd_notify:
+            logger.debug(f"sd_notify: {message}")
+            self._sd_notify.notify(message)
+
     def run(self) -> None:
         state = None
         while True:
             state = self._worker(old_state=state)
-            if state == State.RELOAD_CONF:
+            if state == State.RELOAD_CONFIG:
                 self._reconfigure()
 
     def _worker(self, old_state: Optional[State]) -> State:
@@ -83,23 +91,22 @@ class Worker:
             if state == State.RUNNING:
                 self.freqtrade.startup()
 
+            if state == State.STOPPED:
+                self.freqtrade.check_for_open_trades()
+
             # Reset heartbeat timestamp to log the heartbeat message at
             # first throttling iteration when the state changes
             self._heartbeat_msg = 0
 
         if state == State.STOPPED:
             # Ping systemd watchdog before sleeping in the stopped state
-            if self._sd_notify:
-                logger.debug("sd_notify: WATCHDOG=1\\nSTATUS=State: STOPPED.")
-                self._sd_notify.notify("WATCHDOG=1\nSTATUS=State: STOPPED.")
+            self._notify("WATCHDOG=1\nSTATUS=State: STOPPED.")
 
             self._throttle(func=self._process_stopped, throttle_secs=self._throttle_secs)
 
         elif state == State.RUNNING:
             # Ping systemd watchdog before throttling
-            if self._sd_notify:
-                logger.debug("sd_notify: WATCHDOG=1\\nSTATUS=State: RUNNING.")
-                self._sd_notify.notify("WATCHDOG=1\nSTATUS=State: RUNNING.")
+            self._notify("WATCHDOG=1\nSTATUS=State: RUNNING.")
 
             self._throttle(func=self._process_running, throttle_secs=self._throttle_secs)
 
@@ -154,9 +161,7 @@ class Worker:
         replaces it with the new instance
         """
         # Tell systemd that we initiated reconfiguration
-        if self._sd_notify:
-            logger.debug("sd_notify: RELOADING=1")
-            self._sd_notify.notify("RELOADING=1")
+        self._notify("RELOADING=1")
 
         # Clean up current freqtrade modules
         self.freqtrade.cleanup()
@@ -167,15 +172,11 @@ class Worker:
         self.freqtrade.notify_status('config reloaded')
 
         # Tell systemd that we completed reconfiguration
-        if self._sd_notify:
-            logger.debug("sd_notify: READY=1")
-            self._sd_notify.notify("READY=1")
+        self._notify("READY=1")
 
     def exit(self) -> None:
         # Tell systemd that we are exiting now
-        if self._sd_notify:
-            logger.debug("sd_notify: STOPPING=1")
-            self._sd_notify.notify("STOPPING=1")
+        self._notify("STOPPING=1")
 
         if self.freqtrade:
             self.freqtrade.notify_status('process died')
